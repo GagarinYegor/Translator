@@ -1,0 +1,14 @@
+{Пример программы}
+begin
+    A := 5;
+    loop A := A - 1; if A <= 0 then goto exitLabel; end;
+    exitLabel:
+    write A;
+
+    B := 5;
+    cycleLabel:
+    B := B - 1;
+    if B > 0 then goto cycleLabel else goto cycleExitLabel;
+    cycleExitLabel:
+    write B;
+end
