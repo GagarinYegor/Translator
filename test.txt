@@ -1,7 +1,10 @@
 {Пример программы}
 begin
-    A := 5;
-    loop A := A - 1; if A <= 0 then goto exitLabel; end;
+    A := 10;
+    loop
+        A := A - 1;
+        if A <= 5 then goto exitLabel;
+    end;
     exitLabel:
     write A;
 
@@ -11,4 +14,4 @@ begin
     if B > 0 then goto cycleLabel else goto cycleExitLabel;
     cycleExitLabel:
     write B;
-end
+end.

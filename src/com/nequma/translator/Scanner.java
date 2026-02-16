@@ -36,29 +36,37 @@ class Scanner {
             case '*': addToken(MULT); break;
             case '/': addToken(DIV); break;
             case ';': addToken(EOP); break;
-            case '=': addToken(match('=') ? EQ : EQ); // Проверка на ==, но по условию только =
-                if (peek() == '=') advance(); break;
+            case '(': addToken(LPAREN); break;
+            case ')': addToken(RPAREN); break;
+            case '[': addToken(LBRACKET); break;
+            case ']': addToken(RBRACKET); break;
+            case ',': addToken(COMMA); break;
+            case ':':
+                if (match('=')) {
+                    addToken(ASS);
+                } else {
+                    addToken(COLON);
+                }
+                break;
+            case '=': addToken(EQ); break;
             case '<':
                 if (match('=')) {
                     addToken(LE);
                 } else if (match('>')) {
-                    addToken(NE); // <>
+                    addToken(NE);
                 } else {
                     addToken(LT);
                 }
                 break;
             case '>':
-                addToken(match('=') ? GE : GT);
-                break;
-            case ':':
-                addToken(match('=') ? ASS : null);
-                if (peekPrevious() == ':' && source.charAt(current - 2) == ':') {
-                    // Обработка метки
+                if (match('=')) {
+                    addToken(GE);
+                } else {
+                    addToken(GT);
                 }
                 break;
             case '{':
-                addToken(COMMENT);
-                // Пропускаем комментарий до закрывающей скобки
+                // Комментарий до закрывающей скобки
                 while (peek() != '}' && !isAtEnd()) {
                     if (peek() == '\n') line++;
                     advance();
@@ -68,24 +76,29 @@ class Scanner {
                     return;
                 }
                 advance(); // Пропускаем }
-                break;
-            case '}':
-                // Конец комментария обрабатывается в блоке case '{'
+                // Не добавляем токен для комментария
                 break;
             case ' ':
             case '\r':
             case '\t':
-                // Ignore whitespace
+                // Игнорируем пробелы
                 break;
             case '\n':
                 line++;
                 break;
             default:
-                if (isDigit(c) || (c == '0' && (peek() == 'B' || peek() == 'b' ||
-                        peek() == 'X' || peek() == 'x'))) {
+                if (isDigit(c)) {
                     number();
                 } else if (isAlpha(c)) {
                     identifier();
+                } else if (c == '.') {
+                    // Может быть началом действительного числа
+                    if (isDigit(peek())) {
+                        number();
+                    } else {
+                        // Период может быть терминатором программы - просто игнорируем
+                        break;
+                    }
                 } else {
                     Translator.error(line, "Unexpected character: " + c);
                 }
@@ -96,16 +109,29 @@ class Scanner {
     private void identifier() {
         while (isAlphaNumeric(peek())) advance();
 
-        // Проверка на метку
-        if (peek() == ':') {
-            String labelName = source.substring(start, current);
-            advance(); // Пропускаем :
-            addToken(LABEL, labelName);
-        } else {
-            String text = source.substring(start, current);
-            TokenType type = keywords.get(text);
-            if (type == null) type = IDENTIFIER;
+        String text = source.substring(start, current);
+
+        // Проверка на ключевое слово mod (регистронезависимо)
+        if (text.equalsIgnoreCase("mod")) {
+            addToken(MOD);
+            return;
+        }
+
+        // Проверка на ключевые слова (регистронезависимо)
+        TokenType type = keywords.get(text.toLowerCase());
+        if (type != null) {
             addToken(type);
+            return;
+        }
+
+        // Проверка на метку (если после идентификатора идет двоеточие)
+        if (peek() == ':') {
+            String labelName = text;
+            advance(); // Пропускаем :
+            // Создаем специальный токен для метки
+            tokens.add(new Token(LABEL, labelName, null, line));
+        } else {
+            addToken(IDENTIFIER, text);
         }
     }
 
@@ -122,8 +148,8 @@ class Scanner {
     }
 
     private void number() {
-        // Проверка на двоичное число
-        if (peekPrevious() == '0' && (peek() == 'B' || peek() == 'b')) {
+        // Проверка на двоичное число (0B или 0b)
+        if (source.charAt(start) == '0' && (peek() == 'B' || peek() == 'b')) {
             advance(); // Пропускаем B/b
             StringBuilder binary = new StringBuilder();
             while (isBinaryDigit(peek())) {
@@ -137,8 +163,8 @@ class Scanner {
             return;
         }
 
-        // Проверка на шестнадцатеричное число
-        if (peekPrevious() == '0' && (peek() == 'X' || peek() == 'x')) {
+        // Проверка на шестнадцатеричное число (0X или 0x)
+        if (source.charAt(start) == '0' && (peek() == 'X' || peek() == 'x')) {
             advance(); // Пропускаем X/x
             StringBuilder hex = new StringBuilder();
             while (isHexDigit(peek())) {
@@ -152,33 +178,16 @@ class Scanner {
             return;
         }
 
-        // Обработка восьмеричных и десятичных чисел
+        // Обработка чисел
         while (isDigit(peek())) advance();
 
-        // Проверка на восьмеричное число (начинается с 0)
-        if (source.charAt(start) == '0' && current > start + 1) {
-            String octalStr = source.substring(start, current);
-            // Проверяем, что все цифры восьмеричные
-            boolean validOctal = true;
-            for (int i = start + 1; i < current; i++) {
-                if (source.charAt(i) < '0' || source.charAt(i) > '7') {
-                    validOctal = false;
-                    break;
-                }
-            }
-            if (validOctal) {
-                addToken(NUMBER, Integer.parseInt(octalStr, 8));
-                return;
-            }
-        }
-
-        // Проверка на действительное число
+        // Проверка на действительное число с дробной частью
         if (peek() == '.' && isDigit(peekNext())) {
             advance(); // Consume the "."
 
             while (isDigit(peek())) advance();
 
-            // Проверка на порядок
+            // Проверка на порядок (E или e)
             if (peek() == 'E' || peek() == 'e') {
                 advance(); // Consume E/e
 
@@ -217,8 +226,36 @@ class Scanner {
             return;
         }
 
-        // Десятичное число
-        addToken(NUMBER, Integer.parseInt(source.substring(start, current)));
+        // Проверка на восьмеричное число
+        if (source.charAt(start) == '0' && current > start + 1) {
+            String octalStr = source.substring(start, current);
+            boolean validOctal = true;
+            for (int i = start + 1; i < current; i++) {
+                char digit = source.charAt(i);
+                if (digit < '0' || digit > '7') {
+                    validOctal = false;
+                    break;
+                }
+            }
+            if (validOctal) {
+                addToken(NUMBER, Integer.parseInt(octalStr, 8));
+                return;
+            }
+        }
+
+        // Десятичное целое число
+        String numStr = source.substring(start, current);
+        try {
+            // Пробуем как целое
+            addToken(NUMBER, Integer.parseInt(numStr));
+        } catch (NumberFormatException e) {
+            // Если слишком большое, пробуем как double
+            try {
+                addToken(NUMBER, Double.parseDouble(numStr));
+            } catch (NumberFormatException ex) {
+                Translator.error(line, "Invalid number: " + numStr);
+            }
+        }
     }
 
     private boolean isBinaryDigit(char c) {
@@ -229,11 +266,6 @@ class Scanner {
         return (c >= '0' && c <= '9') ||
                 (c >= 'A' && c <= 'F') ||
                 (c >= 'a' && c <= 'f');
-    }
-
-    private char peekPrevious() {
-        if (current - 1 < 0) return '\0';
-        return source.charAt(current - 1);
     }
 
     private boolean match(char expected) {
@@ -288,5 +320,8 @@ class Scanner {
         keywords.put("then", THEN);
         keywords.put("else", ELSE);
         keywords.put("loop", LOOP);
+        keywords.put("integer", INTEGER);
+        keywords.put("real", REAL);
+        keywords.put("mod", MOD);
     }
 }

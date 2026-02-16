@@ -20,7 +20,7 @@ enum TokenType {
     ASS,     // (variable) := (expression)
 
     // Разделители
-    EOP,     // ; (End Of Program/Statement)
+    EOP,     // ;
     COMMENT, // {}
 
     // Ключевые слова
@@ -37,13 +37,22 @@ enum TokenType {
     IF,      // if
     THEN,    // then
     ELSE,    // else
-    LOOP,// loop
+    LOOP,    // loop
+    INTEGER, // integer
+    REAL,    // real
 
     // Литералы
     IDENTIFIER, // идентификатор
     NUMBER,     // число (целое или действительное)
     LABEL,      // метка
 
-    // Специальные
+    // Специальные символы
+    LPAREN,    // (
+    RPAREN,    // )
+    LBRACKET,  // [
+    RBRACKET,  // ]
+    COMMA,     // ,
+    COLON,     // :
+
     EOF      // End Of File
 }
