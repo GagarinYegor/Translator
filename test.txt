@@ -1,6 +1,7 @@
 {Пример программы}
 begin
-    A := 10;
+    A := 0;
+    read A;
     loop
         A := A - 1;
         if A <= 5 then goto exitLabel;
