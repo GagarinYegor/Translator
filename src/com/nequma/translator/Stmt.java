@@ -4,21 +4,21 @@ import java.util.List;
 
 abstract class Stmt {
     interface Visitor<R> {
-        R visitBlockStmt(Block stmt);
+        R visitBlockStmt(Block stmt); //Составной
+        R visitVarStmt(Var stmt); //Присваивания
+        R visitGotoStmt(Goto stmt); //Перехода
+        R visitIfStmt(If stmt); //Условный
+        R visitLoopStmt(Loop stmt); //Цикла
+        R visitEmptyStmt(Empty stmt); //Пустой
+        R visitReadStmt(Read stmt); //Ввода
+        R visitWriteStmt(Write stmt); //Вывода
         R visitExpressionStmt(Expression stmt);
-        R visitIfStmt(If stmt);
-        R visitWriteStmt(Write stmt);
-        R visitReadStmt(Read stmt);
-        R visitVarStmt(Var stmt);
-        R visitLoopStmt(Loop stmt);
-        R visitGotoStmt(Goto stmt);
         R visitLabelStmt(Label stmt);
-        R visitEmptyStmt(Empty stmt);
     }
 
     static class Block extends Stmt {
-        Block(List<Stmt> statements) {
-            this.statements = statements;
+        Block(List<Stmt> stmts) {
+            this.stmts = stmts;
         }
 
         @Override
@@ -26,12 +26,12 @@ abstract class Stmt {
             return visitor.visitBlockStmt(this);
         }
 
-        final List<Stmt> statements;
+        final List<Stmt> stmts;
     }
 
     static class Expression extends Stmt {
-        Expression(Expr expression) {
-            this.expression = expression;
+        Expression(Expr expr) {
+            this.expr = expr;
         }
 
         @Override
@@ -39,7 +39,7 @@ abstract class Stmt {
             return visitor.visitExpressionStmt(this);
         }
 
-        final Expr expression;
+        final Expr expr;
     }
 
     static class If extends Stmt {
@@ -107,8 +107,8 @@ abstract class Stmt {
     }
 
     static class Loop extends Stmt {
-        Loop(List<Stmt> statements) {
-            this.statements = statements;
+        Loop(Block body) {
+            this.body = body;
         }
 
         @Override
@@ -116,7 +116,7 @@ abstract class Stmt {
             return visitor.visitLoopStmt(this);
         }
 
-        final List<Stmt> statements;
+        final Block body;
     }
 
     static class Goto extends Stmt {

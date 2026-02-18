@@ -21,7 +21,7 @@ enum TokenType {
 
     // Разделители
     EOP,     // ;
-    COMMENT, // {}
+    COMMENT, // { ... }
 
     // Ключевые слова
     BST,     // begin

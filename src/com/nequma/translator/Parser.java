@@ -1,6 +1,7 @@
 package com.nequma.translator;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static com.nequma.translator.TokenType.*;
@@ -17,13 +18,17 @@ public class Parser {
     }
 
     List<Stmt> parse() {
-        List<Stmt> statements = new ArrayList<>();
+        // Если программа начинается с 'begin', парсим её как один блок
+        if (check(BST)) {
+            Stmt block = blockStatement();
+            return List.of(block);
+        }
+        
+        List<Stmt> stmts = new ArrayList<>();
         try {
             while (!isAtEnd()) {
-                Stmt stmt = declaration();
-                if (stmt != null) {
-                    statements.add(stmt);
-                }
+                List<Stmt> decls = declaration();
+                stmts.addAll(decls);
                 // Ожидаем ';' между операторами, но не в конце и не перед end
                 if (!isAtEnd() && !check(EST) && !check(EOF)) {
                     if (check(EOP)) {
@@ -34,36 +39,55 @@ public class Parser {
         } catch (ParseError error) {
             // Ошибка уже залогирована
         }
-        return statements;
+        // Представляем программу как один блок (begin ... end)
+        if (stmts.isEmpty()) {
+            return List.of(new Stmt.Block(new ArrayList<>()));
+        }
+        return List.of(new Stmt.Block(stmts));
     }
 
-    private Stmt declaration() {
+    private List<Stmt> declaration() {
         try {
-            // Проверка на метку
-            if (check(LABEL)) {
-                return labelStatement();
+            // Комментарии игнорируются парсером (лексема COMMENT)
+            if (check(COMMENT)) {
+                advance();
+                return Collections.emptyList();
+            }
+            
+            // 'end' не является declaration - это терминатор для блоков/циклов
+            if (check(EST)) {
+                return Collections.emptyList();
             }
 
-            // Проверка на описание переменной (идентификатор, за которым может быть , или :)
+            // Проверка на описание переменной: идентификатор { "," идентификатор } ":" тип
             if (check(IDENTIFIER)) {
-                if (checkNext(COLON) || checkNext(COMMA)) {
+                if (checkNext(COMMA) || (checkNext(COLON) && (checkNext(INTEGER, 2) || checkNext(REAL, 2) || checkNext(VECTOR, 2)))) {
                     return varDeclaration();
                 }
             }
 
-            return statement();
+            // Проверка на метку: идентификатор, за которым следует ':' (не объявление переменной)
+            if (check(IDENTIFIER) && checkNext(COLON)) {
+                Token labelName = advance(); // IDENTIFIER
+                advance(); // COLON
+                return List.of(new Stmt.Label(labelName));
+            }
+
+            Stmt stmt = statement();
+            return stmt != null ? List.of(stmt) : Collections.emptyList();
         } catch (ParseError error) {
             synchronize();
-            return null;
+            return Collections.emptyList();
         }
     }
-
-    private Stmt labelStatement() {
-        Token label = advance(); // LABEL
-        return new Stmt.Label(label);
+    
+    private boolean checkNext(TokenType type, int offset) {
+        if (current + offset >= tokens.size()) return false;
+        return tokens.get(current + offset).type == type;
     }
 
-    private Stmt varDeclaration() {
+
+    private List<Stmt> varDeclaration() {
         List<Token> identifiers = new ArrayList<>();
         identifiers.add(consume(IDENTIFIER, "Expect variable name."));
 
@@ -93,25 +117,26 @@ public class Parser {
             throw error(peek(), "Expect type 'integer' or 'real'.");
         }
 
-        // Создаем объявление для первого идентификатора
-        // В реальном проекте нужно создать несколько объявлений
-        Token name = identifiers.get(0);
-        return new Stmt.Var(name, null, isVector, size, type);
+        // Создаем объявление для каждого идентификатора (EBNF: идентификатор { "," идентификатор } ":"
+        List<Stmt> declarations = new ArrayList<>();
+        for (Token name : identifiers) {
+            declarations.add(new Stmt.Var(name, null, isVector, size, type));
+        }
+        return declarations;
     }
 
     private Stmt statement() {
+        // 'end' не является statement - это терминатор для блоков/циклов
+        if (check(EST)) {
+            return null;
+        }
+        
         if (match(BST)) return blockStatement();
         if (match(IF)) return ifStatement();
         if (match(LOOP)) return loopStatement();
         if (match(GOTO)) return gotoStatement();
         if (match(READ)) return readStatement();
         if (match(WRITE)) return writeStatement();
-        if (match(SKIP, SPACE, TAB)) {
-            Token spec = previous();
-            List<Object> args = new ArrayList<>();
-            args.add(spec.type);
-            return new Stmt.Write(args);
-        }
 
         // Проверка на присваивание
         if (check(IDENTIFIER)) {
@@ -123,21 +148,62 @@ public class Parser {
     }
 
     private Stmt blockStatement() {
-        List<Stmt> statements = new ArrayList<>();
+        List<Stmt> stmts = new ArrayList<>();
+        int nestingLevel = 0; // Отслеживаем уровень вложенности begin/end и loop/end
 
-        while (!check(EST) && !isAtEnd()) {
-            Stmt stmt = declaration();
-            if (stmt != null) {
-                statements.add(stmt);
+        // Если блок вызван из parse() и начинается с 'begin', потребляем его (один 'end' закроет весь блок)
+        if (check(BST)) {
+            advance();
+            nestingLevel = 1;
+        }
+
+        while (!isAtEnd()) {
+            if (check(EST)) {
+                if (nestingLevel == 0) {
+                    // Это 'end' для этого блока
+                    break;
+                } else {
+                    // Это 'end' для вложенной конструкции (блок или цикл)
+                    nestingLevel--;
+                    stmts.addAll(declaration());
+                    continue;
+                }
             }
+            
+            if (check(BST)) {
+                nestingLevel++;
+            } else if (check(LOOP)) {
+                nestingLevel++;
+                advance(); // Потребляем токен LOOP
+                // Парсим цикл (он остановится когда увидит 'end' на уровне вложенности 0)
+                Stmt stmt = loopStatement();
+                if (stmt != null) {
+                    stmts.add(stmt);
+                }
+                // После парсинга цикла проверяем, не является ли следующий токен 'end'
+                // (циклы не имеют собственного 'end', они бесконечные)
+                // Цикл должен был остановиться на 'end', поэтому он должен быть следующим токеном
+                if (check(EST)) {
+                    if (nestingLevel > 0) nestingLevel--;
+                    // Выходим - следующий 'end' закроет этот блок
+                    break;
+                }
+                // Если после цикла нет 'end', продолжаем парсинг других statements
+                // (это не должно происходить, но на всякий случай)
+            }
+            
+            stmts.addAll(declaration());
             // Пропускаем ';' если есть
             if (check(EOP)) {
                 advance();
             }
         }
 
+        if (!check(EST)) {
+            throw error(peek(), "Expect 'end' after block.");
+        }
         consume(EST, "Expect 'end' after block.");
-        return new Stmt.Block(statements);
+        return new Stmt.Block(stmts);
     }
 
     private Stmt ifStatement() {
@@ -152,21 +218,63 @@ public class Parser {
     }
 
     private Stmt loopStatement() {
-        List<Stmt> statements = new ArrayList<>();
+        List<Stmt> stmts = new ArrayList<>();
+        int nestingLevel = 0; // Отслеживаем уровень вложенности begin/end
 
-        while (!check(EST) && !isAtEnd()) {
-            Stmt stmt = declaration();
-            if (stmt != null) {
-                statements.add(stmt);
+        // Циклы не требуют 'end' - они бесконечные, выход только через goto к метке
+        // Парсим операторы до тех пор, пока не встретим 'end' на уровне вложенности 0
+        // (который закроет внешний блок, а не цикл)
+        while (!isAtEnd()) {
+            // Проверяем 'end' в начале каждой итерации
+            if (check(EST)) {
+                if (nestingLevel == 0) {
+                    // Это 'end' для внешнего блока, не для цикла
+                    // Цикл не имеет собственного 'end', поэтому просто останавливаемся
+                    // НЕ потребляем токен 'end' - пусть blockStatement обработает его
+                    break;
+                } else {
+                    // Это 'end' для вложенного блока внутри цикла
+                    nestingLevel--;
+                    advance(); // Потребляем токен 'end' для вложенного блока
+                    // Если после этого уровень 0 — тело цикла закончилось, не парсим дальше
+                    if (nestingLevel == 0) break;
+                    continue;
+                }
             }
+            
+            if (check(BST)) {
+                nestingLevel++;
+            }
+            
+            // Перед вызовом declaration() еще раз проверяем 'end'
+            // (на случай, если предыдущая итерация пропустила его)
+            if (check(EST) && nestingLevel == 0) {
+                break;
+            }
+            
+            stmts.addAll(declaration());
+            
+            // Если declaration() вернул пустой список, это может быть потому что текущий токен - 'end'
+            // Проверяем это и останавливаемся если nestingLevel == 0
+            if (check(EST) && nestingLevel == 0) {
+                break;
+            }
+            
             // Пропускаем ';' если есть
             if (check(EOP)) {
                 advance();
             }
+            
+            // После ';' также проверяем 'end'
+            if (check(EST) && nestingLevel == 0) {
+                break;
+            }
         }
 
-        consume(EST, "Expect 'end' after loop.");
-        return new Stmt.Loop(statements);
+        // Тело цикла представляется как блок операторов
+        // Цикл бесконечный - выход только через goto к метке
+        Stmt.Block body = new Stmt.Block(stmts);
+        return new Stmt.Loop(body);
     }
 
     private Stmt gotoStatement() {
@@ -211,8 +319,8 @@ public class Parser {
             throw error(peek(), "Invalid assignment target.");
         }
 
-        // Если нет присваивания, это просто выражение
-        return new Stmt.Expression(expr);
+        // В учебном языке нет операторов из одиночных выражений без присваивания
+        throw error(previous(), "Expect ':=' after variable in assignment statement.");
     }
 
     private Expr variable() {
@@ -351,6 +459,7 @@ public class Parser {
             if (previous().type == EOP) return;
 
             switch (peek().type) {
+                case COMMENT:
                 case BST:
                 case EST:
                 case IF:

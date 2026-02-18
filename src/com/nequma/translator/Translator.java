@@ -101,13 +101,13 @@ public class Translator {
         //System.out.println("Scanning successful.");
 
         Parser parser = new Parser(tokens);
-        List<Stmt> statements = parser.parse();
+        List<Stmt> stmts = parser.parse();
 
         if (viewStagesExpected || parsingOutExpected) {
             AstPrinter printer = new AstPrinter();
             StringBuilder outString = new StringBuilder();
             if (viewStagesExpected) System.out.println("\nParsing output:");
-            for (Stmt stmt : statements) {
+            for (Stmt stmt : stmts) {
                 if (viewStagesExpected) System.out.println(printer.print(stmt));
                 outString.append(printer.print(stmt)).append("\n");
             }
@@ -132,7 +132,7 @@ public class Translator {
 
         System.out.println("\nInterpreter output:");
         Interpreter interpreter = new Interpreter();
-        interpreter.interpret(statements);
+        interpreter.interpret(stmts);
     }
 
     static void error(int line, String message) {

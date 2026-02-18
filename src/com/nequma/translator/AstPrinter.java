@@ -21,18 +21,13 @@ class AstPrinter implements Expr.Visitor<String>, Stmt.Visitor<String> {
 
     @Override
     public String visitGroupingExpr(Expr.Grouping expr) {
-        return parenthesize("group", expr.expression);
+        return parenthesize("group", expr.expr);
     }
 
     @Override
     public String visitLiteralExpr(Expr.Literal expr) {
         if (expr.value == null) return "nil";
         return expr.value.toString();
-    }
-
-    @Override
-    public String visitLogicalExpr(Expr.Logical expr) {
-        return parenthesize(expr.operator.lexeme, expr.left, expr.right);
     }
 
     @Override
@@ -49,7 +44,7 @@ class AstPrinter implements Expr.Visitor<String>, Stmt.Visitor<String> {
     public String visitBlockStmt(Stmt.Block stmt) {
         StringBuilder builder = new StringBuilder();
         builder.append("(block");
-        for (Stmt s : stmt.statements) {
+        for (Stmt s : stmt.stmts) {
             builder.append("\n  ");
             builder.append(s.accept(this).replace("\n", "\n  "));
         }
@@ -59,7 +54,7 @@ class AstPrinter implements Expr.Visitor<String>, Stmt.Visitor<String> {
 
     @Override
     public String visitExpressionStmt(Stmt.Expression stmt) {
-        return parenthesize("expr", stmt.expression);
+        return parenthesize("expr", stmt.expr);
     }
 
     @Override
@@ -108,14 +103,8 @@ class AstPrinter implements Expr.Visitor<String>, Stmt.Visitor<String> {
 
     @Override
     public String visitLoopStmt(Stmt.Loop stmt) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("(loop");
-        for (Stmt s : stmt.statements) {
-            builder.append("\n  ");
-            builder.append(s.accept(this).replace("\n", "\n  "));
-        }
-        builder.append(")");
-        return builder.toString();
+        // Тело цикла представлено как блок
+        return parenthesize("loop", stmt.body);
     }
 
     @Override

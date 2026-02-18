@@ -66,7 +66,8 @@ class Scanner {
                 }
                 break;
             case '{':
-                // Комментарий до закрывающей скобки
+                // Комментарий до закрывающей скобки: { ... }
+                int commentStart = current; // позиция сразу после '{'
                 while (peek() != '}' && !isAtEnd()) {
                     if (peek() == '\n') line++;
                     advance();
@@ -75,8 +76,9 @@ class Scanner {
                     Translator.error(line, "Unterminated comment.");
                     return;
                 }
-                advance(); // Пропускаем }
-                // Не добавляем токен для комментария
+                String commentText = source.substring(commentStart, current);
+                advance(); // Пропускаем '}'
+                addToken(COMMENT, commentText);
                 break;
             case ' ':
             case '\r':
@@ -124,15 +126,9 @@ class Scanner {
             return;
         }
 
-        // Проверка на метку (если после идентификатора идет двоеточие)
-        if (peek() == ':') {
-            String labelName = text;
-            advance(); // Пропускаем :
-            // Создаем специальный токен для метки
-            tokens.add(new Token(LABEL, labelName, null, line));
-        } else {
-            addToken(IDENTIFIER, text);
-        }
+        // Не создаем LABEL автоматически - пусть парсер решает
+        // Метки будут определяться парсером на основе контекста
+        addToken(IDENTIFIER, text);
     }
 
     private boolean isAlpha(char c) {

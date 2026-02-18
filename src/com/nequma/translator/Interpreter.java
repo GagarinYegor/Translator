@@ -1,43 +1,94 @@
 package com.nequma.translator;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
 
 class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
+    private static final class Frame {
+        final List<Stmt> stmts;
+        int index;
+        final boolean isLoop;
+
+        Frame(List<Stmt> stmts, int index, boolean isLoop) {
+            this.stmts = stmts;
+            this.index = index;
+            this.isLoop = isLoop;
+        }
+
+        Frame copy() {
+            return new Frame(stmts, index, isLoop);
+        }
+    }
+
     private Environment environment = new Environment();
-    private Map<String, Integer> labels = new HashMap<>();
-    private int currentStatementIndex = 0;
-    private List<Stmt> statements;
+    /** Labels to full stack (path into nested blocks/loops). */
+    private Map<String, List<Frame>> labels = new HashMap<>();
+    private List<Frame> stack = new ArrayList<>();
     private boolean gotoJump = false;
+    private String gotoTargetLabel = null;
+    private Token gotoToken = null;
     private Scanner inputScanner = new Scanner(System.in);
 
-    void interpret(List<Stmt> statements) {
-        // Если есть только один Block на верхнем уровне, используем его statements
-        if (statements.size() == 1 && statements.get(0) instanceof Stmt.Block) {
-            this.statements = ((Stmt.Block) statements.get(0)).statements;
-        } else {
-            this.statements = statements;
+    void interpret(List<Stmt> stmts) {
+        if (stmts.size() != 1 || !(stmts.get(0) instanceof Stmt.Block)) {
+            throw new RuntimeError(null, "Program must be represented as a single Block statement.");
         }
+        Stmt.Block programBlock = (Stmt.Block) stmts.get(0);
+        List<Stmt> programStmts = programBlock.stmts;
 
-        // Первый проход: сбор меток
-        for (int i = 0; i < this.statements.size(); i++) {
-            Stmt stmt = this.statements.get(i);
-            if (stmt instanceof Stmt.Label) {
-                Stmt.Label labelStmt = (Stmt.Label) stmt;
-                labels.put(labelStmt.name.lexeme, i);
-            }
-        }
+        // Collect all labels from the entire AST (including nested blocks and loop bodies)
+        collectLabels(programStmts, new ArrayList<>(), programStmts, false);
 
-        // Второй проход: выполнение
+        stack.clear();
+        stack.add(new Frame(programStmts, 0, false));
+
         try {
-            while (currentStatementIndex < this.statements.size()) {
-                Stmt statement = this.statements.get(currentStatementIndex);
-                gotoJump = false;
-                execute(statement);
-                if (!gotoJump) {
-                    currentStatementIndex++;
+            while (!stack.isEmpty()) {
+                if (gotoJump && gotoTargetLabel != null) {
+                    List<Frame> target = labels.get(gotoTargetLabel);
+                    if (target == null) {
+                        throw new RuntimeError(gotoToken, "Undefined label: " + gotoTargetLabel);
+                    }
+                    stack.clear();
+                    for (Frame f : target) {
+                        stack.add(f.copy());
+                    }
+                    gotoJump = false;
+                    gotoTargetLabel = null;
+                    continue;
+                }
+
+                Frame frame = stack.get(stack.size() - 1);
+                if (frame.index >= frame.stmts.size()) {
+                    if (frame.isLoop) {
+                        frame.index = 0;
+                    } else {
+                        stack.remove(stack.size() - 1);
+                    }
+                    continue;
+                }
+
+                Stmt stmt = frame.stmts.get(frame.index);
+                int stackSizeBefore = stack.size();
+                execute(stmt);
+
+                if (stack.size() == stackSizeBefore) {
+                    frame.index++;
+                }
+
+                // Advance past end of list (pop or loop)
+                frame = stack.get(stack.size() - 1);
+                while (frame.index >= frame.stmts.size()) {
+                    if (frame.isLoop) {
+                        frame.index = 0;
+                        break;
+                    }
+                    stack.remove(stack.size() - 1);
+                    if (stack.isEmpty()) break;
+                    frame = stack.get(stack.size() - 1);
                 }
             }
         } catch (RuntimeError error) {
@@ -45,14 +96,30 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
         }
     }
 
-    @Override
-    public Object visitLiteralExpr(Expr.Literal expr) {
-        return expr.value;
+    private void collectLabels(List<Stmt> stmts, List<Frame> stackPrefix, List<Stmt> currentList, boolean currentIsLoop) {
+        for (int i = 0; i < stmts.size(); i++) {
+            Stmt s = stmts.get(i);
+            if (s instanceof Stmt.Label) {
+                List<Frame> fullStack = new ArrayList<>(stackPrefix);
+                fullStack.add(new Frame(currentList, i, currentIsLoop));
+                labels.put(((Stmt.Label) s).name.lexeme, fullStack);
+            }
+            if (s instanceof Stmt.Block) {
+                List<Frame> newStack = new ArrayList<>(stackPrefix);
+                newStack.add(new Frame(currentList, i, currentIsLoop));
+                collectLabels(((Stmt.Block) s).stmts, newStack, ((Stmt.Block) s).stmts, false);
+            }
+            if (s instanceof Stmt.Loop) {
+                List<Frame> newStack = new ArrayList<>(stackPrefix);
+                newStack.add(new Frame(currentList, i, currentIsLoop));
+                collectLabels(((Stmt.Loop) s).body.stmts, newStack, ((Stmt.Loop) s).body.stmts, true);
+            }
+        }
     }
 
     @Override
-    public Object visitLogicalExpr(Expr.Logical expr) {
-        return null;
+    public Object visitLiteralExpr(Expr.Literal expr) {
+        return expr.value;
     }
 
     @Override
@@ -158,7 +225,7 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
 
     @Override
     public Object visitGroupingExpr(Expr.Grouping expr) {
-        return evaluate(expr.expression);
+        return evaluate(expr.expr);
     }
 
     private void checkNumberOperand(Token operator, Object operand) {
@@ -200,29 +267,15 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
         stmt.accept(this);
     }
 
-    void executeBlock(List<Stmt> statements, Environment environment) {
-        Environment previous = this.environment;
-
-        try {
-            this.environment = environment;
-            for (Stmt statement : statements) {
-                if (gotoJump) break;
-                execute(statement);
-            }
-        } finally {
-            this.environment = previous;
-        }
-    }
-
     @Override
     public Void visitBlockStmt(Stmt.Block stmt) {
-        executeBlock(stmt.statements, new Environment(environment));
+        stack.add(new Frame(stmt.stmts, 0, false));
         return null;
     }
 
     @Override
     public Void visitExpressionStmt(Stmt.Expression stmt) {
-        evaluate(stmt.expression);
+        evaluate(stmt.expr);
         return null;
     }
 
@@ -304,32 +357,14 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
 
     @Override
     public Void visitLoopStmt(Stmt.Loop stmt) {
-        while (true) {
-            // Выполняем тело цикла
-            for (Stmt statement : stmt.statements) {
-                if (gotoJump) {
-                    // Goto прыгнул за пределы цикла
-                    return null;
-                }
-                execute(statement);
-            }
-
-            if (gotoJump) {
-                // Goto прыгнул за пределы цикла
-                return null;
-            }
-
-            // Продолжаем цикл
-        }
+        stack.add(new Frame(stmt.body.stmts, 0, true));
+        return null;
     }
 
     @Override
     public Void visitGotoStmt(Stmt.Goto stmt) {
-        Integer targetIndex = labels.get(stmt.label.lexeme);
-        if (targetIndex == null) {
-            throw new RuntimeError(stmt.label, "Undefined label: " + stmt.label.lexeme);
-        }
-        currentStatementIndex = targetIndex;
+        gotoTargetLabel = stmt.label.lexeme;
+        gotoToken = stmt.label;
         gotoJump = true;
         return null;
     }

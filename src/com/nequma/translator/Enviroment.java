@@ -37,8 +37,8 @@ class Environment {
             return;
         }
 
-        // Auto-declare variable if it doesn't exist (common in simple interpreters)
-        values.put(name.lexeme, value);
+        throw new RuntimeError(name,
+                "Undefined variable '" + name.lexeme + "'. Variable must be declared before use.");
     }
 
     void define(String name, Object value) {
