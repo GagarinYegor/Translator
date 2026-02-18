@@ -24,6 +24,7 @@ public class Translator {
         viewStagesExpected = false;
 
         for (int i = 1; i < args.length; i++) {
+            System.out.println(args[i]);
             switch (args[i]) {
                 case "-VS":
                     viewStagesExpected = true;

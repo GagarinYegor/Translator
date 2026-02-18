@@ -4,12 +4,13 @@ begin
     read A;
     loop
         A := A - 1;
-        if A <= 5 then goto exitLabel;
+        if A <= 0 then goto exitLabel;
     end;
     exitLabel:
     write A;
 
-    B := 5;
+    B := 0;
+    read B;
     cycleLabel:
     B := B - 1;
     if B > 0 then goto cycleLabel else goto cycleExitLabel;

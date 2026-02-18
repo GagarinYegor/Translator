@@ -39,7 +39,7 @@ public class Parser {
 
     private Stmt declaration() {
         try {
-            // Проверка на метку (LABEL уже создан сканером)
+            // Проверка на метку
             if (check(LABEL)) {
                 return labelStatement();
             }
