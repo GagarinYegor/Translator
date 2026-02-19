@@ -114,7 +114,10 @@ class AstPrinter implements Expr.Visitor<String>, Stmt.Visitor<String> {
 
     @Override
     public String visitLabelStmt(Stmt.Label stmt) {
-        return parenthesize("label", stmt.name.lexeme);
+        if (stmt.body != null) {
+            return "(label " + stmt.name.lexeme + " " + stmt.body.accept(this) + ")";
+        }
+        return "(label " + stmt.name.lexeme + ")";
     }
 
     @Override

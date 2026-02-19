@@ -18,119 +18,204 @@ public class Parser {
     }
 
     List<Stmt> parse() {
-        // Если программа начинается с 'begin', парсим её как один блок
-        if (check(BST)) {
-            Stmt block = blockStatement();
-            return List.of(block);
-        }
-        
         List<Stmt> stmts = new ArrayList<>();
+
         try {
             while (!isAtEnd()) {
+                // Skip comments
+                while (check(COMMENT)) {
+                    advance();
+                }
+
+                if (isAtEnd()) break;
+
+                // Parse a declaration or statement
                 List<Stmt> decls = declaration();
-                stmts.addAll(decls);
-                // Ожидаем ';' между операторами, но не в конце и не перед end
-                if (!isAtEnd() && !check(EST) && !check(EOF)) {
-                    if (check(EOP)) {
-                        advance(); // пропускаем ;
+                if (decls != null && !decls.isEmpty()) {
+                    stmts.addAll(decls);
+                }
+
+                // После каждого оператора должна быть ';' согласно EBNF
+                if (!isAtEnd() && !check(EOF)) {
+                    // Проверяем, не находимся ли мы в конце программы
+                    if (check(EST)) {
+                        // Если мы видим 'end', это значит, что мы в конце блока
+                        // Точка с запятой будет требоваться после выхода из блока
+                        break;
                     }
+
+                    if (!check(EOP)) {
+                        throw error(peek(), "Expected ';' after statement");
+                    }
+                    advance(); // consume ';'
                 }
             }
         } catch (ParseError error) {
-            // Ошибка уже залогирована
+            // Error already logged
         }
-        // Представляем программу как один блок (begin ... end)
-        if (stmts.isEmpty()) {
-            return List.of(new Stmt.Block(new ArrayList<>()));
+
+        // Check for extra tokens after program end
+        if (!isAtEnd() && !check(EOF) && !check(EST)) {
+            error(peek(), "Unexpected token after program end");
         }
-        return List.of(new Stmt.Block(stmts));
+
+        // Wrap the entire program in a Block statement
+        return Collections.singletonList(new Stmt.Block(stmts));
     }
 
     private List<Stmt> declaration() {
         try {
-            // Комментарии игнорируются парсером (лексема COMMENT)
-            if (check(COMMENT)) {
+            // Skip comments
+            while (check(COMMENT)) {
                 advance();
-                return Collections.emptyList();
-            }
-            
-            // 'end' не является declaration - это терминатор для блоков/циклов
-            if (check(EST)) {
-                return Collections.emptyList();
             }
 
-            // Проверка на описание переменной: идентификатор { "," идентификатор } ":" тип
+            if (check(EST)) {
+                return null;
+            }
+
+            // Handle labels: identifier followed by colon
+            if (check(IDENTIFIER) && checkNext(COLON)) {
+                Token labelName = advance();
+                advance(); // consume ':'
+                List<Stmt> bodyList = declaration(); // Parse the statement that follows the label
+                Stmt body = (bodyList != null && !bodyList.isEmpty()) ? bodyList.get(0) : new Stmt.Empty();
+                return Collections.singletonList(new Stmt.Label(labelName, body));
+            }
+
+            // Check for variable declaration - pattern: identifier { "," identifier } ":" type
             if (check(IDENTIFIER)) {
-                if (checkNext(COMMA) || (checkNext(COLON) && (checkNext(INTEGER, 2) || checkNext(REAL, 2) || checkNext(VECTOR, 2)))) {
+                // Check if this identifier is actually a keyword
+                if (isKeyword(peek().lexeme)) {
+                    // It's a keyword, so it must be a statement, not a declaration
+                    Stmt stmt = statement();
+                    return stmt != null ? Collections.singletonList(stmt) : null;
+                }
+
+                // Check if next token indicates a variable declaration
+                if (checkNext(COMMA) || checkNext(COLON)) {
                     return varDeclaration();
                 }
             }
 
-            // Проверка на метку: идентификатор, за которым следует ':' (не объявление переменной)
-            if (check(IDENTIFIER) && checkNext(COLON)) {
-                Token labelName = advance(); // IDENTIFIER
-                advance(); // COLON
-                return List.of(new Stmt.Label(labelName));
+            // If we get here, it should be a statement
+            if (canStartStatement()) {
+                Stmt stmt = statement();
+                return stmt != null ? Collections.singletonList(stmt) : null;
             }
 
-            Stmt stmt = statement();
-            return stmt != null ? List.of(stmt) : Collections.emptyList();
+            // If we can't recognize anything, skip this token
+            if (!isAtEnd()) {
+                advance();
+            }
+            return null;
         } catch (ParseError error) {
             synchronize();
-            return Collections.emptyList();
+            return null;
         }
     }
-    
-    private boolean checkNext(TokenType type, int offset) {
-        if (current + offset >= tokens.size()) return false;
-        return tokens.get(current + offset).type == type;
-    }
-
 
     private List<Stmt> varDeclaration() {
-        List<Token> identifiers = new ArrayList<>();
-        identifiers.add(consume(IDENTIFIER, "Expect variable name."));
-
-        while (match(COMMA)) {
-            identifiers.add(consume(IDENTIFIER, "Expect variable name after ','."));
+        // Make sure we're actually at a variable declaration
+        if (!check(IDENTIFIER)) {
+            throw error(peek(), "Expected identifier for variable declaration");
         }
 
-        consume(COLON, "Expect ':' after variable name(s).");
+        // Double-check that this identifier is not a keyword
+        if (isKeyword(peek().lexeme)) {
+            throw error(peek(), "Keyword '" + peek().lexeme + "' cannot be used as variable name");
+        }
 
+        List<Token> identifiers = new ArrayList<>();
+        identifiers.add(consume(IDENTIFIER, "Expected variable name"));
+
+        while (match(COMMA)) {
+            // After comma, we must have another identifier
+            if (!check(IDENTIFIER)) {
+                throw error(peek(), "Expected variable name after ','");
+            }
+            // Check that it's not a keyword
+            if (isKeyword(peek().lexeme)) {
+                throw error(peek(), "Keyword '" + peek().lexeme + "' cannot be used as variable name");
+            }
+            identifiers.add(consume(IDENTIFIER, "Expected variable name after ','"));
+        }
+
+        // Must have colon before type
+        consume(COLON, "Expected ':' after variable names");
+
+        // Check for vector declaration
         boolean isVector = false;
         Expr size = null;
 
         if (match(VECTOR)) {
             isVector = true;
-            consume(LBRACKET, "Expect '[' after 'vector'.");
+            consume(LBRACKET, "Expected '[' after 'vector'");
             size = expression();
-            consume(RBRACKET, "Expect ']' after vector size.");
-            consume(OF, "Expect 'of' after vector size.");
+            consume(RBRACKET, "Expected ']' after vector size");
+            consume(OF, "Expected 'of' after vector size");
         }
 
+        // Parse type - must be integer or real
         String type;
         if (match(INTEGER)) {
             type = "integer";
         } else if (match(REAL)) {
             type = "real";
         } else {
-            throw error(peek(), "Expect type 'integer' or 'real'.");
+            throw error(peek(), "Expected type 'integer' or 'real' in variable declaration");
         }
 
-        // Создаем объявление для каждого идентификатора (EBNF: идентификатор { "," идентификатор } ":"
+        // Create Var statements for each identifier
         List<Stmt> declarations = new ArrayList<>();
         for (Token name : identifiers) {
             declarations.add(new Stmt.Var(name, null, isVector, size, type));
         }
+
         return declarations;
     }
 
-    private Stmt statement() {
-        // 'end' не является statement - это терминатор для блоков/циклов
-        if (check(EST)) {
-            return null;
+    private boolean isKeyword(String lexeme) {
+        String lower = lexeme.toLowerCase();
+        return lower.equals("if") ||
+                lower.equals("loop") ||
+                lower.equals("goto") ||
+                lower.equals("read") ||
+                lower.equals("write") ||
+                lower.equals("begin") ||
+                lower.equals("end") ||
+                lower.equals("integer") ||
+                lower.equals("real") ||
+                lower.equals("vector") ||
+                lower.equals("of") ||
+                lower.equals("then") ||
+                lower.equals("else") ||
+                lower.equals("skip") ||
+                lower.equals("space") ||
+                lower.equals("tab") ||
+                lower.equals("mod");
+    }
+
+    /** Tokens that can start a statement */
+    private boolean canStartStatement() {
+        if (isAtEnd()) return false;
+
+        TokenType type = peek().type;
+        switch (type) {
+            case BST:      // begin
+            case IF:
+            case LOOP:
+            case GOTO:
+            case READ:
+            case WRITE:
+            case IDENTIFIER:
+                return true;
+            default:
+                return false;
         }
-        
+    }
+
+    private Stmt statement() {
         if (match(BST)) return blockStatement();
         if (match(IF)) return ifStatement();
         if (match(LOOP)) return loopStatement();
@@ -138,155 +223,130 @@ public class Parser {
         if (match(READ)) return readStatement();
         if (match(WRITE)) return writeStatement();
 
-        // Проверка на присваивание
+        // Check for assignment statement
         if (check(IDENTIFIER)) {
             return assignmentStatement();
         }
 
-        // Пустой оператор (может быть просто ';')
+        // Empty statement
         return new Stmt.Empty();
     }
 
     private Stmt blockStatement() {
         List<Stmt> stmts = new ArrayList<>();
-        int nestingLevel = 0; // Отслеживаем уровень вложенности begin/end и loop/end
 
-        // Если блок вызван из parse() и начинается с 'begin', потребляем его (один 'end' закроет весь блок)
-        if (check(BST)) {
-            advance();
-            nestingLevel = 1;
-        }
-
-        while (!isAtEnd()) {
-            if (check(EST)) {
-                if (nestingLevel == 0) {
-                    // Это 'end' для этого блока
-                    break;
-                } else {
-                    // Это 'end' для вложенной конструкции (блок или цикл)
-                    nestingLevel--;
-                    stmts.addAll(declaration());
-                    continue;
-                }
-            }
-            
-            if (check(BST)) {
-                nestingLevel++;
-            } else if (check(LOOP)) {
-                nestingLevel++;
-                advance(); // Потребляем токен LOOP
-                // Парсим цикл (он остановится когда увидит 'end' на уровне вложенности 0)
-                Stmt stmt = loopStatement();
-                if (stmt != null) {
-                    stmts.add(stmt);
-                }
-                // После парсинга цикла проверяем, не является ли следующий токен 'end'
-                // (циклы не имеют собственного 'end', они бесконечные)
-                // Цикл должен был остановиться на 'end', поэтому он должен быть следующим токеном
-                if (check(EST)) {
-                    if (nestingLevel > 0) nestingLevel--;
-                    // Выходим - следующий 'end' закроет этот блок
-                    break;
-                }
-                // Если после цикла нет 'end', продолжаем парсинг других statements
-                // (это не должно происходить, но на всякий случай)
-            }
-            
-            stmts.addAll(declaration());
-            // Пропускаем ';' если есть
-            if (check(EOP)) {
+        // Parse statements inside block until matching 'end'
+        while (!isAtEnd() && !check(EST)) {
+            // Skip comments
+            while (check(COMMENT)) {
                 advance();
             }
+
+            if (check(EST)) break;
+
+            // Parse a declaration or statement
+            List<Stmt> decls = declaration();
+            if (decls != null) {
+                stmts.addAll(decls);
+            }
+
+            // После каждого оператора внутри блока должна быть ';'
+            // Единственное исключение - если мы дошли до конца блока
+            if (!check(EST)) {
+                if (!check(EOP)) {
+                    throw error(peek(), "Expected ';' after statement in block");
+                }
+                advance(); // consume ';'
+            }
         }
 
+        // Check for missing 'end'
         if (!check(EST)) {
-            throw error(peek(), "Expect 'end' after block.");
+            throw error(peek(), "Expected 'end' to close block");
         }
-        consume(EST, "Expect 'end' after block.");
+
+        consume(EST, "Expected 'end' to close block");
+
+        // ВАЖНО: После закрытия блока мы НЕ требуем ';' здесь,
+        // потому что blockStatement() вызывается из statement(),
+        // и ';' будет требоваться в вызывающем контексте
+
         return new Stmt.Block(stmts);
     }
 
     private Stmt ifStatement() {
         Expr condition = expression();
-        consume(THEN, "Expect 'then' after condition.");
+        consume(THEN, "Expected 'then' after condition");
         Stmt thenBranch = statement();
         Stmt elseBranch = null;
+
         if (match(ELSE)) {
             elseBranch = statement();
         }
+
         return new Stmt.If(condition, thenBranch, elseBranch);
     }
 
     private Stmt loopStatement() {
         List<Stmt> stmts = new ArrayList<>();
-        int nestingLevel = 0; // Отслеживаем уровень вложенности begin/end
 
-        // Циклы не требуют 'end' - они бесконечные, выход только через goto к метке
-        // Парсим операторы до тех пор, пока не встретим 'end' на уровне вложенности 0
-        // (который закроет внешний блок, а не цикл)
-        while (!isAtEnd()) {
-            // Проверяем 'end' в начале каждой итерации
-            if (check(EST)) {
-                if (nestingLevel == 0) {
-                    // Это 'end' для внешнего блока, не для цикла
-                    // Цикл не имеет собственного 'end', поэтому просто останавливаемся
-                    // НЕ потребляем токен 'end' - пусть blockStatement обработает его
-                    break;
-                } else {
-                    // Это 'end' для вложенного блока внутри цикла
-                    nestingLevel--;
-                    advance(); // Потребляем токен 'end' для вложенного блока
-                    // Если после этого уровень 0 — тело цикла закончилось, не парсим дальше
-                    if (nestingLevel == 0) break;
-                    continue;
-                }
-            }
-            
-            if (check(BST)) {
-                nestingLevel++;
-            }
-            
-            // Перед вызовом declaration() еще раз проверяем 'end'
-            // (на случай, если предыдущая итерация пропустила его)
-            if (check(EST) && nestingLevel == 0) {
-                break;
-            }
-            
-            stmts.addAll(declaration());
-            
-            // Если declaration() вернул пустой список, это может быть потому что текущий токен - 'end'
-            // Проверяем это и останавливаемся если nestingLevel == 0
-            if (check(EST) && nestingLevel == 0) {
-                break;
-            }
-            
-            // Пропускаем ';' если есть
-            if (check(EOP)) {
+        // Parse loop body: { оператор ";" } end
+        while (!isAtEnd() && !check(EST)) {
+            // Skip comments
+            while (check(COMMENT)) {
                 advance();
             }
-            
-            // После ';' также проверяем 'end'
-            if (check(EST) && nestingLevel == 0) {
-                break;
+
+            if (check(EST)) break;
+
+            // Parse a single statement
+            List<Stmt> decls = declaration();
+            if (decls != null) {
+                stmts.addAll(decls);
+            }
+
+            // После каждого оператора в теле цикла должна быть ';'
+            // Единственное исключение - если мы дошли до конца цикла
+            if (!check(EST)) {
+                if (!check(EOP)) {
+                    throw error(peek(), "Expected ';' after statement in loop body");
+                }
+                advance(); // consume ';'
             }
         }
 
-        // Тело цикла представляется как блок операторов
-        // Цикл бесконечный - выход только через goto к метке
-        Stmt.Block body = new Stmt.Block(stmts);
-        return new Stmt.Loop(body);
+        // Check for missing 'end'
+        if (!check(EST)) {
+            throw error(peek(), "Expected 'end' to close loop");
+        }
+
+        consume(EST, "Expected 'end' to close loop");
+
+        // ВАЖНО: После закрытия цикла мы НЕ требуем ';' здесь,
+        // потому что loopStatement() вызывается из statement(),
+        // и ';' будет требоваться в вызывающем контексте
+
+        return new Stmt.Loop(new Stmt.Block(stmts));
     }
 
     private Stmt gotoStatement() {
-        Token label = consume(IDENTIFIER, "Expect label name after 'goto'.");
+        Token label = consume(IDENTIFIER, "Expected label name after 'goto'");
         return new Stmt.Goto(label);
     }
 
     private Stmt readStatement() {
         List<Expr> variables = new ArrayList<>();
+
+        // First variable
+        if (!check(IDENTIFIER)) {
+            throw error(peek(), "Expected variable name after 'read'");
+        }
         variables.add(variable());
 
         while (match(COMMA)) {
+            if (!check(IDENTIFIER)) {
+                throw error(peek(), "Expected variable name after ','");
+            }
             variables.add(variable());
         }
 
@@ -296,13 +356,20 @@ public class Parser {
     private Stmt writeStatement() {
         List<Object> arguments = new ArrayList<>();
 
-        do {
+        // First argument
+        if (check(SKIP) || check(SPACE) || check(TAB)) {
+            arguments.add(advance().type);
+        } else {
+            arguments.add(expression());
+        }
+
+        while (match(COMMA)) {
             if (check(SKIP) || check(SPACE) || check(TAB)) {
                 arguments.add(advance().type);
             } else {
                 arguments.add(expression());
             }
-        } while (match(COMMA));
+        }
 
         return new Stmt.Write(arguments);
     }
@@ -311,31 +378,32 @@ public class Parser {
         Expr expr = variable();
 
         if (match(ASS)) {
-            if (expr instanceof Expr.Variable) {
-                Expr.Variable var = (Expr.Variable) expr;
-                Expr value = expression();
-                return new Stmt.Expression(new Expr.Assign(var.name, value));
+            if (!(expr instanceof Expr.Variable)) {
+                throw error(previous(), "Invalid assignment target");
             }
-            throw error(peek(), "Invalid assignment target.");
+            Expr.Variable var = (Expr.Variable) expr;
+            Expr value = expression();
+            return new Stmt.Expression(new Expr.Assign(var.name, value));
         }
 
-        // В учебном языке нет операторов из одиночных выражений без присваивания
-        throw error(previous(), "Expect ':=' after variable in assignment statement.");
+        throw error(peek(), "Expected ':=' in assignment statement");
     }
 
     private Expr variable() {
-        Token name = consume(IDENTIFIER, "Expect variable name.");
+        Token name = consume(IDENTIFIER, "Expected variable name");
 
+        // Handle array indexing if present
         if (match(LBRACKET)) {
             Expr index = expression();
-            consume(RBRACKET, "Expect ']' after index.");
-            // Для упрощения возвращаем просто переменную
-            // В реальном проекте нужно создать отдельный тип
+            consume(RBRACKET, "Expected ']' after index");
+            // For now, just return the variable name
+            // In a full implementation, you'd create an ArrayAccess expression
         }
 
         return new Expr.Variable(name);
     }
 
+    // Expression parsing methods
     private Expr expression() {
         return comparison();
     }
@@ -397,13 +465,14 @@ public class Parser {
 
         if (match(LPAREN)) {
             Expr expr = expression();
-            consume(RPAREN, "Expect ')' after expression.");
+            consume(RPAREN, "Expected ')' after expression");
             return new Expr.Grouping(expr);
         }
 
-        throw error(peek(), "Expect expression.");
+        throw error(peek(), "Expected expression");
     }
 
+    // Helper methods
     private boolean match(TokenType... types) {
         for (TokenType type : types) {
             if (check(type)) {
@@ -427,6 +496,11 @@ public class Parser {
     private boolean checkNext(TokenType type) {
         if (current + 1 >= tokens.size()) return false;
         return tokens.get(current + 1).type == type;
+    }
+
+    private boolean checkNext(TokenType type, int offset) {
+        if (current + offset >= tokens.size()) return false;
+        return tokens.get(current + offset).type == type;
     }
 
     private Token advance() {
@@ -459,7 +533,6 @@ public class Parser {
             if (previous().type == EOP) return;
 
             switch (peek().type) {
-                case COMMENT:
                 case BST:
                 case EST:
                 case IF:
@@ -467,7 +540,7 @@ public class Parser {
                 case GOTO:
                 case READ:
                 case WRITE:
-                case LABEL:
+                case COMMENT:
                     return;
                 default:
                     advance();

@@ -133,8 +133,10 @@ abstract class Stmt {
     }
 
     static class Label extends Stmt {
-        Label(Token name) {
+        /** EBNF: оператор = [ метка ] непомеченный — метка может сопровождать следующий оператор */
+        Label(Token name, Stmt body) {
             this.name = name;
+            this.body = body;
         }
 
         @Override
@@ -143,6 +145,8 @@ abstract class Stmt {
         }
 
         final Token name;
+        /** Непомеченный оператор после метки (null только при ошибке восстановления). */
+        final Stmt body;
     }
 
     static class Empty extends Stmt {

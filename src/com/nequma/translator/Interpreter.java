@@ -23,72 +23,94 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
         }
     }
 
+    private static class LabelInfo {
+        final List<Frame> stack;
+        final int frameIndex;
+        final int stmtIndex;
+
+        LabelInfo(List<Frame> stack, int frameIndex, int stmtIndex) {
+            this.stack = stack;
+            this.frameIndex = frameIndex;
+            this.stmtIndex = stmtIndex;
+        }
+    }
+
     private Environment environment = new Environment();
-    /** Labels to full stack (path into nested blocks/loops). */
-    private Map<String, List<Frame>> labels = new HashMap<>();
+    private Map<String, LabelInfo> labels = new HashMap<>();
     private List<Frame> stack = new ArrayList<>();
     private boolean gotoJump = false;
     private String gotoTargetLabel = null;
     private Token gotoToken = null;
     private Scanner inputScanner = new Scanner(System.in);
 
-    void interpret(List<Stmt> stmts) {
+    public void interpret(List<Stmt> stmts) {
         if (stmts.size() != 1 || !(stmts.get(0) instanceof Stmt.Block)) {
             throw new RuntimeError(null, "Program must be represented as a single Block statement.");
         }
         Stmt.Block programBlock = (Stmt.Block) stmts.get(0);
         List<Stmt> programStmts = programBlock.stmts;
 
-        // Collect all labels from the entire AST (including nested blocks and loop bodies)
-        collectLabels(programStmts, new ArrayList<>(), programStmts, false);
+        // Collect all labels
+        labels.clear();
+        collectLabels(programStmts, new ArrayList<>(), 0);
 
         stack.clear();
         stack.add(new Frame(programStmts, 0, false));
 
         try {
             while (!stack.isEmpty()) {
+                // Handle goto jumps
                 if (gotoJump && gotoTargetLabel != null) {
-                    List<Frame> target = labels.get(gotoTargetLabel);
+                    LabelInfo target = labels.get(gotoTargetLabel);
                     if (target == null) {
                         throw new RuntimeError(gotoToken, "Undefined label: " + gotoTargetLabel);
                     }
+
+                    // Clear current stack and rebuild to target position
                     stack.clear();
-                    for (Frame f : target) {
+                    for (Frame f : target.stack) {
                         stack.add(f.copy());
                     }
+
+                    // Set the index of the last frame to the target statement
+                    if (!stack.isEmpty()) {
+                        Frame lastFrame = stack.get(stack.size() - 1);
+                        lastFrame.index = target.stmtIndex;
+                    }
+
                     gotoJump = false;
                     gotoTargetLabel = null;
                     continue;
                 }
 
                 Frame frame = stack.get(stack.size() - 1);
+
+                // Check if we've reached the end of the current frame
                 if (frame.index >= frame.stmts.size()) {
                     if (frame.isLoop) {
+                        // For loops, reset to beginning (infinite loop)
                         frame.index = 0;
+                        continue;
                     } else {
+                        // For blocks, pop the frame
                         stack.remove(stack.size() - 1);
+                        if (!stack.isEmpty()) {
+                            // Increment the index of the parent frame
+                            stack.get(stack.size() - 1).index++;
+                        }
+                        continue;
                     }
-                    continue;
                 }
 
+                // Execute the current statement
                 Stmt stmt = frame.stmts.get(frame.index);
-                int stackSizeBefore = stack.size();
+
+                // Don't increment index yet - let the statement execution handle it
                 execute(stmt);
 
-                if (stack.size() == stackSizeBefore) {
+                // Move to next statement if we didn't push a new frame and no goto jump
+                if (!gotoJump) {
                     frame.index++;
-                }
-
-                // Advance past end of list (pop or loop)
-                frame = stack.get(stack.size() - 1);
-                while (frame.index >= frame.stmts.size()) {
-                    if (frame.isLoop) {
-                        frame.index = 0;
-                        break;
-                    }
-                    stack.remove(stack.size() - 1);
-                    if (stack.isEmpty()) break;
-                    frame = stack.get(stack.size() - 1);
                 }
             }
         } catch (RuntimeError error) {
@@ -96,23 +118,82 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
         }
     }
 
-    private void collectLabels(List<Stmt> stmts, List<Frame> stackPrefix, List<Stmt> currentList, boolean currentIsLoop) {
+    private void collectLabels(List<Stmt> stmts, List<Frame> currentStack, int baseIndex) {
         for (int i = 0; i < stmts.size(); i++) {
             Stmt s = stmts.get(i);
+
             if (s instanceof Stmt.Label) {
-                List<Frame> fullStack = new ArrayList<>(stackPrefix);
-                fullStack.add(new Frame(currentList, i, currentIsLoop));
-                labels.put(((Stmt.Label) s).name.lexeme, fullStack);
+                Stmt.Label label = (Stmt.Label) s;
+                List<Frame> labelStack = new ArrayList<>(currentStack);
+
+                // For labels, the target is the statement after the label
+                // But we need to point to the label itself for proper execution
+                int targetIndex = i;
+
+                // If the label has a body, we need to handle that specially
+                if (label.body != null) {
+                    labels.put(label.name.lexeme, new LabelInfo(labelStack, labelStack.size() - 1, i));
+
+                    // Recursively collect labels from the body
+                    if (label.body instanceof Stmt.Block) {
+                        List<Frame> newStack = new ArrayList<>(currentStack);
+                        newStack.add(new Frame(((Stmt.Block) label.body).stmts, 0, false));
+                        collectLabels(((Stmt.Block) label.body).stmts, newStack, 0);
+                    } else if (label.body instanceof Stmt.Loop) {
+                        List<Frame> newStack = new ArrayList<>(currentStack);
+                        newStack.add(new Frame(((Stmt.Loop) label.body).body.stmts, 0, true));
+                        collectLabels(((Stmt.Loop) label.body).body.stmts, newStack, 0);
+                    } else {
+                        // For non-block bodies, create a single-statement list
+                        List<Stmt> singleStmtList = new ArrayList<>();
+                        singleStmtList.add(label.body);
+                        List<Frame> newStack = new ArrayList<>(currentStack);
+                        newStack.add(new Frame(singleStmtList, 0, false));
+                        collectLabels(singleStmtList, newStack, 0);
+                    }
+                } else {
+                    labels.put(label.name.lexeme, new LabelInfo(labelStack, labelStack.size() - 1, i));
+                }
             }
-            if (s instanceof Stmt.Block) {
-                List<Frame> newStack = new ArrayList<>(stackPrefix);
-                newStack.add(new Frame(currentList, i, currentIsLoop));
-                collectLabels(((Stmt.Block) s).stmts, newStack, ((Stmt.Block) s).stmts, false);
+            // Recursively collect labels from nested blocks
+            else if (s instanceof Stmt.Block) {
+                List<Frame> newStack = new ArrayList<>(currentStack);
+                newStack.add(new Frame(((Stmt.Block) s).stmts, 0, false));
+                collectLabels(((Stmt.Block) s).stmts, newStack, 0);
             }
-            if (s instanceof Stmt.Loop) {
-                List<Frame> newStack = new ArrayList<>(stackPrefix);
-                newStack.add(new Frame(currentList, i, currentIsLoop));
-                collectLabels(((Stmt.Loop) s).body.stmts, newStack, ((Stmt.Loop) s).body.stmts, true);
+            // Recursively collect labels from loop bodies
+            else if (s instanceof Stmt.Loop) {
+                List<Frame> newStack = new ArrayList<>(currentStack);
+                newStack.add(new Frame(((Stmt.Loop) s).body.stmts, 0, true));
+                collectLabels(((Stmt.Loop) s).body.stmts, newStack, 0);
+            }
+            // Handle if statements (both branches may contain labels)
+            else if (s instanceof Stmt.If) {
+                Stmt.If ifStmt = (Stmt.If) s;
+
+                // Check then branch
+                if (ifStmt.thenBranch instanceof Stmt.Block) {
+                    List<Frame> newStack = new ArrayList<>(currentStack);
+                    newStack.add(new Frame(((Stmt.Block) ifStmt.thenBranch).stmts, 0, false));
+                    collectLabels(((Stmt.Block) ifStmt.thenBranch).stmts, newStack, 0);
+                } else if (ifStmt.thenBranch instanceof Stmt.Loop) {
+                    List<Frame> newStack = new ArrayList<>(currentStack);
+                    newStack.add(new Frame(((Stmt.Loop) ifStmt.thenBranch).body.stmts, 0, true));
+                    collectLabels(((Stmt.Loop) ifStmt.thenBranch).body.stmts, newStack, 0);
+                }
+
+                // Check else branch
+                if (ifStmt.elseBranch != null) {
+                    if (ifStmt.elseBranch instanceof Stmt.Block) {
+                        List<Frame> newStack = new ArrayList<>(currentStack);
+                        newStack.add(new Frame(((Stmt.Block) ifStmt.elseBranch).stmts, 0, false));
+                        collectLabels(((Stmt.Block) ifStmt.elseBranch).stmts, newStack, 0);
+                    } else if (ifStmt.elseBranch instanceof Stmt.Loop) {
+                        List<Frame> newStack = new ArrayList<>(currentStack);
+                        newStack.add(new Frame(((Stmt.Loop) ifStmt.elseBranch).body.stmts, 0, true));
+                        collectLabels(((Stmt.Loop) ifStmt.elseBranch).body.stmts, newStack, 0);
+                    }
+                }
             }
         }
     }
@@ -357,7 +438,9 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
 
     @Override
     public Void visitLoopStmt(Stmt.Loop stmt) {
-        stack.add(new Frame(stmt.body.stmts, 0, true));
+        // Create a new frame for the loop body
+        Frame loopFrame = new Frame(stmt.body.stmts, 0, true);
+        stack.add(loopFrame);
         return null;
     }
 
@@ -371,7 +454,9 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
 
     @Override
     public Void visitLabelStmt(Stmt.Label stmt) {
-        // Метки просто пропускаем (ничего не делаем)
+        if (stmt.body != null) {
+            execute(stmt.body);
+        }
         return null;
     }
 
