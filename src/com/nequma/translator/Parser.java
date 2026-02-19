@@ -243,13 +243,16 @@ public class Parser {
                 break;
             }
 
-            // After each statement, there must be ';'
-            if (!check(EST)) {
-                if (!check(EOP)) {
+            // After each statement, there must be ';' (EBNF: оператор ";")
+            // Must require ; even when next token is end - missing ; is an error
+            if (!check(EOP)) {
+                if (check(EST)) {
+                    throw error(peek(), "Expected ';' after statement in compound statement (before 'end')");
+                } else {
                     throw error(peek(), "Expected ';' after statement in compound statement");
                 }
-                advance(); // consume ';'
             }
+            advance(); // consume ';'
         }
 
         // Must have EST (end)
@@ -285,13 +288,16 @@ public class Parser {
                 break;
             }
 
-            // After each statement, there must be ';'
-            if (!check(EST)) {
-                if (!check(EOP)) {
+            // After each statement, there must be ';' (EBNF: оператор ";")
+            // Must require ; even when next token is end - missing ; is an error
+            if (!check(EOP)) {
+                if (check(EST)) {
+                    throw error(peek(), "Expected ';' after statement in loop body (before 'end')");
+                } else {
                     throw error(peek(), "Expected ';' after statement in loop body");
                 }
-                advance(); // consume ';'
             }
+            advance(); // consume ';'
         }
 
         // Must have EST (end)
