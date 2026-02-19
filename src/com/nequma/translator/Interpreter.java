@@ -44,18 +44,15 @@ class Interpreter implements Expr.Visitor<Object>, Stmt.Visitor<Void> {
     private Scanner inputScanner = new Scanner(System.in);
 
     public void interpret(List<Stmt> stmts) {
-        if (stmts.size() != 1 || !(stmts.get(0) instanceof Stmt.Block)) {
-            throw new RuntimeError(null, "Program must be represented as a single Block statement.");
-        }
-        Stmt.Block programBlock = (Stmt.Block) stmts.get(0);
-        List<Stmt> programStmts = programBlock.stmts;
+        // EBNF: программа = { ( описание | оператор ) ";" } конец_файла.
+        // Program is a list of statements, not wrapped in a block
 
         // Collect all labels
         labels.clear();
-        collectLabels(programStmts, new ArrayList<>(), 0);
+        collectLabels(stmts, new ArrayList<>(), 0);
 
         stack.clear();
-        stack.add(new Frame(programStmts, 0, false));
+        stack.add(new Frame(stmts, 0, false));
 
         try {
             while (!stack.isEmpty()) {
