@@ -268,6 +268,7 @@ public class Parser {
         List<Stmt> stmts = new ArrayList<>();
 
         // Parse loop body: { оператор ";" }
+        // Note: оператор can be declaration or statement according to EBNF
         while (!isAtEnd() && !check(EST)) {
             // Skip comments
             while (check(COMMENT)) {
@@ -276,10 +277,10 @@ public class Parser {
 
             if (check(EST)) break;
 
-            // Parse a statement (which can be a compound statement/block)
-            Stmt stmt = statement();
-            if (stmt != null) {
-                stmts.add(stmt);
+            // Parse a declaration or statement (which can be a compound statement/block)
+            List<Stmt> decls = declarationOrStatement();
+            if (decls != null && !decls.isEmpty()) {
+                stmts.addAll(decls);
             } else {
                 break;
             }
@@ -301,8 +302,19 @@ public class Parser {
         consume(EST, "Expected 'end' to close loop");
         // Note: No ';' after EST according to EBNF
 
-        // Loop body is a list of statements, wrap in Block for consistency
-        return new Stmt.Loop(new Stmt.Block(stmts));
+        // EBNF: цикла = loop { оператор ";" } end.
+        // Loop body is a sequence of statements. If there's only one statement and it's a Block,
+        // use it directly to avoid unnecessary nesting. Otherwise, wrap in a Block.
+        Stmt.Block loopBody;
+        if (stmts.size() == 1 && stmts.get(0) instanceof Stmt.Block) {
+            // Single compound statement - use it directly
+            loopBody = (Stmt.Block) stmts.get(0);
+        } else {
+            // Multiple statements or non-block statement - wrap in Block
+            loopBody = new Stmt.Block(stmts);
+        }
+        
+        return new Stmt.Loop(loopBody);
     }
 
     // EBNF: условный = if выражение then непомеченный [ else непомеченный ].
