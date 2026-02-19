@@ -127,8 +127,14 @@ public class Translator {
             return;
         }
 
-        //System.out.println("Parsing successful.");
-        //System.out.println("Number of statements: " + statements.size());
+        // Semantic analysis: check variables are declared before use
+        Resolver resolver = new Resolver();
+        resolver.resolve(stmts);
+
+        if (resolver.hadError() || hadError) {
+            System.out.println("Semantic analysis failed.");
+            return;
+        }
 
         System.out.println("\nInterpreter output:");
         Interpreter interpreter = new Interpreter();
