@@ -584,15 +584,6 @@ public class Parser {
         return peek().type == type;
     }
 
-    private boolean checkNext(TokenType type) {
-        return checkNext(type, 0);
-    }
-
-    private boolean checkNext(TokenType type, int offset) {
-        if (current + offset >= tokens.size()) return false;
-        return tokens.get(current + offset).type == type;
-    }
-
     private Token advance() {
         if (!isAtEnd()) current++;
         return previous();
@@ -614,28 +605,6 @@ public class Parser {
         Translator.error(token, message);
         hadError = true;
         return new ParseError();
-    }
-
-    private void synchronize() {
-        advance();
-
-        while (!isAtEnd()) {
-            if (previous().type == EOP) return;
-
-            switch (peek().type) {
-                case BST:
-                case EST:
-                case IF:
-                case LOOP:
-                case GOTO:
-                case READ:
-                case WRITE:
-                case COMMENT:
-                    return;
-                default:
-                    advance();
-            }
-        }
     }
 
     private boolean isKeyword(String lexeme) {
